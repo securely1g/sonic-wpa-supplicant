@@ -1,0 +1,54 @@
+module(name = "sonic-wpa-supplicant", version = "2.9.0.sonic.1", bazel_compatibility = [">=8.5.1", "<=8.5.1"])
+
+bazel_dep(name = "bazel_lib", version = "3.2.2")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.22")
+bazel_dep(name = "rules_python", version = "1.9.0")
+bazel_dep(name = "rules_rs", version = "0.1.0")
+bazel_dep(name = "rules_gzip", version = "1.0.0")
+bazel_dep(name = "rules_foreign_cc", version = "0.16.0.sonic.1")
+bazel_dep(name = "rules_distroless", version = "0.9.4.sonic.14")
+bazel_dep(name = "tar.bzl", version = "0.10.5.sonic.1")
+bazel_dep(name = "sonic-build-infra", version = "0.0.26-0378d53824b18b253ecbd6faadba00e505ff4ccf", repo_name = "sonic_build_infra")
+bazel_dep(name = "sonic-swss-common", version = "0.0.8-33d2790e5f954496c2b79e38854a2b5e2dfa7a3a", repo_name = "sonic_swss_common")
+bazel_dep(name = "sonic-fips", version = "0.0.3-d1a2c8f692d4197295269ed445022c3890b0f1a6", repo_name = "sonic_fips")
+bazel_dep(name = "libnl3", version = "3.7.0.sonic.7")
+
+single_version_override(module_name = "rules_foreign_cc", version = "0.16.0.sonic.1")
+single_version_override(module_name = "rules_go", version = "0.64.1-sonic.1")
+
+gcc = use_extension("@sonic_build_infra//toolchains/gcc:extensions.bzl", "gcc")
+use_repo(gcc, "gcc_toolchains")
+register_toolchains("@gcc_toolchains//:all")
+register_toolchains("@sonic_build_infra//tools/gzip:toolchain")
+register_toolchains(
+    "@sonic_build_infra//tools/build_tools:make_toolchain",
+    "@sonic_build_infra//tools/build_tools:m4_toolchain",
+    "@sonic_build_infra//tools/build_tools:pkgconfig_toolchain",
+)
+
+# Common owns its Rust targets. Its shared extension still requires a root
+# toolchain declaration when this consumer selects only the C++ interface.
+rust = use_extension("@rules_rs//rs:rules_rust_reexported_extensions.bzl", "rust", dev_dependency = True)
+rust.toolchain(edition = "2021", versions = ["1.90.0"])
+use_repo(rust, "rust_toolchains")
+register_toolchains("@rust_toolchains//:all", dev_dependency = True)
+
+# Target ABI libraries only. SONiC Common, patched libnl and OpenSSL are built
+# by their source owners rather than taken from these Debian packages.
+apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")
+apt.install(
+    dependency_set = "wpa_deps",
+    packages = [
+        "libdbus-1-dev:amd64",
+        "libncurses-dev:amd64",
+        "libpcsclite-dev:amd64",
+        "libreadline-dev:amd64",
+    ],
+    suites = ["trixie", "trixie-updates", "trixie-security"],
+)
+use_repo(apt, "wpa_deps", "sysroot")
+
+# Runtime-only target libraries, pinned from the same selected native closure.
+apt.import_lock(lock = "//:tools/bazel/apt.lock.json")
+use_repo(apt, "wpa_runtime")
