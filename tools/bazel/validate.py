@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUTS = {"//:wpasupplicant_pkg": "wpasupplicant.tar",
            "//:wpasupplicant_pkg.debug_symbols": "wpasupplicant.debug.tar.gz",
            "//:runtime_packages.json": "runtime_packages.json"}
-TESTS = ["//:package_test", "//:upstream_test", "//:build_flags_test"]
+TESTS = ["//:package_test", "//:upstream_test", "//:build_flags_test", "//:make_flags_test"]
 
 
 def require(value, message):
@@ -108,11 +108,11 @@ def main():
 
     def resolved_inputs():
         graph = bazel("mod", "graph")
-        require("sonic-build-infra@0.0.26-0378d53824b18b253ecbd6faadba00e505ff4ccf" in graph,
+        require("sonic-build-infra@0.0.26-51c838da6ff57295fde6e0bc3807841cb31a8568" in graph,
                 "Selected shared tooling version differs from the reviewed source")
         infra = bazel("mod", "show_repo", "@sonic_build_infra")
-        require("http_archive(" in infra and "0378d53824b18b253ecbd6faadba00e505ff4ccf" in infra
-                and "sha256-DuQV6XZA6gqL7hIeTaZAuugLmZzolnTTVCuPO0xxYgs=" in infra,
+        require("http_archive(" in infra and "51c838da6ff57295fde6e0bc3807841cb31a8568" in infra
+                and "sha256-nYuM1ahKhqAJUXseWPs2LRNi9qKEAyAGLYVw7GbX750=" in infra,
                 "Actual tooling source is not the reviewed immutable archive; local overrides are not acceptance")
         libnl = bazel("mod", "show_repo", "@libnl3")
         require("libnl3@3.7.0.sonic.7" in graph and "http_archive(" in libnl
@@ -120,9 +120,9 @@ def main():
                 and "0002-match-shared-output-sonames.patch" in libnl,
                 "Actual libnl repository lacks the reviewed owner interface")
         common = bazel("mod", "show_repo", "@sonic_swss_common")
-        require("sonic-swss-common@0.0.8-33d2790e5f954496c2b79e38854a2b5e2dfa7a3a" in graph
-                and "http_archive(" in common and "33d2790e5f954496c2b79e38854a2b5e2dfa7a3a" in common
-                and "sha256-Bl4vd+IpDXwmnyPUF6qqmZcuEEOXiQ6LGNUWOgYreCo=" in common,
+        require("sonic-swss-common@0.0.8-43598143ef4a46431eae0859915cd7d951dad1ed" in graph
+                and "http_archive(" in common and "43598143ef4a46431eae0859915cd7d951dad1ed" in common
+                and "sha256-a6PXXUxzW+0tTMaaOwypdZC/T6vvj7b1SiiEwLfhhpE=" in common,
                 "Common differs from the registered owner source")
         (output / "common-repository.txt").write_text(common)
         record = {"common_repository_sha256": hashlib.sha256(common.encode()).hexdigest(),
@@ -239,8 +239,8 @@ def main():
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         record = {**identity, "architecture": "amd64", "artifacts": snapshot(files),
                   "resolved_inputs": json.loads((output / "resolved-inputs.json").read_text()),
-                  "registry_revision": "46428f1a59a3988f603bd3f3165136fd4d8c1960",
-                  "infra_source": "0378d53824b18b253ecbd6faadba00e505ff4ccf"}
+                  "registry_revision": "b5a92b67de1fa3b2ad6001f9f66e8308fb868a7a",
+                  "infra_source": "51c838da6ff57295fde6e0bc3807841cb31a8568"}
         (output / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
 
 
