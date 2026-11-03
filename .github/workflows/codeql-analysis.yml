@@ -25,15 +25,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'cpp','python' ]
+        # The legacy C++ job below generates Common DEBs. This source-TAR
+        # feature uses the separate traced Bazel C++ job below; other branches
+        # keep their existing languages.
+        language: ${{ fromJSON((github.head_ref || github.ref_name) == 'codex/bazel-amd64' && '["python"]' || '["cpp","python"]') }}
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v2.1.29
+      uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
       with:
         config-file: ./.github/codeql/codeql-config.yml
         languages: ${{ matrix.language }}
@@ -97,6 +100,97 @@ jobs:
         popd
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v2.1.29
+      uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
       with:
         category: "/language:${{matrix.language}}"
+
+  bazel-cpp:
+    name: Analyze native source (cpp, AMD64)
+    if: ${{ (github.head_ref || github.ref_name) == 'codex/bazel-amd64' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container: debian:trixie-20260918@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      BAZELISK_GITHUB_TOKEN: ""
+      CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install execution tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends binutils build-essential ca-certificates curl git patch pkg-config python3 tar unzip xz-utils zstd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-version: 1.29.0
+          bazelisk-cache: true
+          repository-cache: true
+          cache-version: "8.5.1"
+      - name: Configure the container checkout
+        run: |
+          test "$(uname -m)" = x86_64
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 - <<'PY'
+          from pathlib import Path
+          home = Path.home() / '.bazelrc'
+          with Path('.bazelrc.user').open('a') as output:
+              if home.exists():
+                  for line in home.read_text().splitlines():
+                      if line.startswith('common --repository_cache='):
+                          print(line, file=output)
+          PY
+      - name: Verify shallow checkout provenance
+        run: python3 tools/bazel/source_identity_test.py
+      - name: Reject DEB-producing actions before traced source execution
+        run: python3 tools/bazel/validate.py audit --codeql
+      - name: Prepare declared tools before enabling the tracer
+        run: |
+          codeql_output_base="$(mktemp -d "$RUNNER_TEMP/wpa-codeql.XXXXXX")"
+          printf "WPA_CODEQL_OUTPUT_BASE=%s\n" "$codeql_output_base" >> "$GITHUB_ENV"
+          tools/bazel/draft_bazel.sh --batch --output_base="$codeql_output_base" build //:build \
+            --compilation_mode=dbg --jobs=2 --spawn_strategy=local --action_env=PATH=/usr/bin:/bin \
+            --noremote_accept_cached --noremote_upload_local_results \
+            --disk_cache= --remote_cache= --remote_executor=
+          # Batch exits in the foreground and retains the on-disk action cache;
+          # PID1 in the job container does not reliably reap daemon servers.
+      - name: Initialize traced C++ analysis
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          config-file: ./.github/codeql/codeql-config.yml
+          languages: cpp
+          build-mode: manual
+          db-location: ${{ runner.temp }}/wpa-codeql-db
+          tools: https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.gz
+      - name: Compile WPA's identical private source target under tracing
+        run: |
+          # This owner action has never run in this output base. Keep only the
+          # prepared local tool actions cached; external cache reads stay off.
+          tools/bazel/draft_bazel.sh --batch --output_base="$WPA_CODEQL_OUTPUT_BASE" build //:codeql_build \
+            --compilation_mode=dbg --jobs=2 --spawn_strategy=local --action_env=PATH=/usr/bin:/bin \
+            --noremote_accept_cached --noremote_upload_local_results \
+            --disk_cache= --remote_cache= --remote_executor=
+      - name: Analyze compiled C++
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          category: /language:cpp
+      - name: Require extracted WPA and SONiC driver definitions
+        run: |
+          python3 tools/bazel/codeql_coverage.py \
+            --database "$RUNNER_TEMP/wpa-codeql-db/cpp" \
+            --output bazel-evidence/codeql-owner-coverage.json
+      - name: Retain extracted owner coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wpa-codeql-owner-coverage-amd64
+          path: bazel-evidence/codeql-owner-coverage.json
+          if-no-files-found: error
