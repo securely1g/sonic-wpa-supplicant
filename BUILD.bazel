@@ -241,3 +241,16 @@ py_test(
     data = ["@sonic_build_infra//tools/build_tools:make", "src/build.rules"],
     target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
 )
+
+py_test(
+    name = "make_flags_test",
+    srcs = ["tools/bazel/make_flags_test.py"],
+    args = [
+        "$(rootpath tools/bazel/make_with_flags.sh)",
+        "$(rootpath tools/bazel/Makefile)",
+    ],
+    data = ["tools/bazel/make_with_flags.sh", "tools/bazel/Makefile"],
+    # Native Trixie CI supplies GCC14 and Make for the actual exec-limit test.
+    tags = ["local"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
