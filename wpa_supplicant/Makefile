@@ -1608,7 +1608,8 @@ endif
 
 ifdef CONFIG_READLINE
 OBJS_c += ../src/utils/edit_readline.o
-LIBS_c += -lreadline -lncurses
+NCURSES_LIBS ?= -lncurses
+LIBS_c += -lreadline $(NCURSES_LIBS)
 else
 ifdef CONFIG_WPA_CLI_EDIT
 OBJS_c += ../src/utils/edit.o
