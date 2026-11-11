@@ -21,6 +21,9 @@ export EXTRA_CFLAGS :=
 export PCSC_CFLAGS :=
 export DBUS_INCLUDE := -DCONFIG_BAZEL_DECLARED_DBUS
 export DBUS_LIBS := -ldbus-1
+# The locked ncurses linker script selects libncurses.so.6 and libtinfo.
+# Use those declared CcInfo libraries without the unstaged .so script alias.
+export NCURSES_LIBS := -l:libncurses.so.6 -ltinfo
 export LIBNL_INC := $(CURDIR)/bazel-libs
 export CONFIG_NO_GITVER := y
 export BINDIR := /sbin
