@@ -82,17 +82,7 @@ _DIRS := $(BUILDDIR)/$(PROJ)
 _make_dirs:
 	@mkdir -p $(_DIRS)
 
-# C++ adapters need CXXFLAGS plus the owner's CFLAGS configuration. Bazel
-# supplies the same large shared baseline in both sets; its optional exact
-# baseline marker avoids duplicating those arguments past GCC's spawn limit.
-# Native Make leaves it unset and retains its complete original CFLAGS.
-# Evaluate at recipe expansion, after all driver/configuration flags are added.
-_wpa_cxx_cflags = $(if $(WPA_CXX_BASE_CFLAGS),$(if $(filter 1,$(words $(filter __WPA_SHARED_BASELINE__,$(subst $(WPA_CXX_BASE_CFLAGS), __WPA_SHARED_BASELINE__ ,$(CFLAGS))))),$(subst $(WPA_CXX_BASE_CFLAGS),,$(CFLAGS)),$(error C++ shared flag baseline must occur exactly once)),$(CFLAGS))
-$(BUILDDIR)/$(PROJ)/src/%.o: $(ROOTDIR)src/%.cpp $(CONFIG_FILE) | _make_dirs
-	$(Q)$(CXX) -c -o $@ $(CXXFLAGS) $(_wpa_cxx_cflags) $<
-	@$(E) "  CXX " $<
-
-$(BUILDDIR)/$(PROJ)/src/%.o: $(ROOTDIR)src/%.c $(CONFIG_FILE) | _make_dirs
+$(BUILDDIR)/$(PROJ)/src/%.o: $(ROOTDIR)src/%.c* $(CONFIG_FILE) | _make_dirs
 	$(Q)$(CC) -c -o $@ $(CFLAGS) $<
 	@$(E) "  CC " $<
 $(BUILDDIR)/$(PROJ)/%.o: %.c $(CONFIG_FILE) | _make_dirs

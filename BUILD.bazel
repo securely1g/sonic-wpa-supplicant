@@ -1,82 +1,41 @@
+load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_gzip//gzip/compress:defs.bzl", "gzip_compress")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_distroless//distroless:defs.bzl", "flatten")
-load("@sonic_build_infra//binary:keep_debug_info.bzl", "keep_debug_info")
 load("@sonic_build_infra//tar:sonic_deploy_tar.bzl", "sonic_deploy_tar")
+load("@sonic_build_infra//binary:keep_debug_info.bzl", "keep_debug_info")
 load("@sonic_build_infra//oci:runtime_packages.bzl", "runtime_packages")
-load("@bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
-load("//:tools/bazel/source_build.bzl", "wpa_builds")
-load("@rules_foreign_cc//foreign_cc:defs.bzl", "make")
-load("@sonic_build_infra//cc:shared_library.bzl", "shared_library_cc_info")
+load("//:tools/bazel/native.bzl", "wpa_binaries")
 
 package(default_visibility = ["//visibility:public"])
-exports_files(["tools/bazel/apt.lock.json"])
 
 filegroup(
     name = "source_files",
-    srcs = glob(["src/**", "wpa_supplicant/**", "debian/**", "tests/**"], exclude = ["**/BUILD.bazel"]) + ["COPYING", "README", "tools/bazel/Makefile"],
+    srcs = glob(["src/**", "wpa_supplicant/**", "debian/**"], exclude = ["**/BUILD.bazel"]) + ["//tests:source_files"],
 )
 
-copy_to_directory(
-    name = "sources",
-    srcs = [":source_files"],
-    # foreign_cc detects a directory artifact's parent. Give this tree a
-    # private parent so it never traverses unrelated Bazel output directories.
-    out = "source-tree/root",
+cc_library(
+    name = "private_headers",
+    hdrs = glob(["src/**/*.h", "wpa_supplicant/**/*.h"]),
+    visibility = ["//tests:__pkg__"],
 )
 
-# Reuse the owner's native shared objects with their existing link identities.
-# The Make frontend stages only their normal -l aliases; it never recompiles
-# Common or the patched libnl sources.
-[shared_library_cc_info(
-    name = library + "_shared_cc",
-    shared_library = "@libnl3//:" + library + "_shared",
-) for library in ["libnl_3", "libnl_genl_3", "libnl_route_3"]]
-
-wpa_builds(
+wpa_binaries()
+filegroup(
     name = "build",
-    lib_source = ":sources",
-    args = ["-C root", "-f tools/bazel/Makefile", "-j2"],
-    targets = ["all", "install"],
-    data = [
-        "@sonic_swss_common//:libswsscommon_consolidated.so",
-    ] + ["@libnl3//:" + library + "_shared" for library in ["libnl_3", "libnl_genl_3", "libnl_route_3"]],
-    env = {
-        "SONIC_COMMON_LIBRARY": "$(execpath @sonic_swss_common//:libswsscommon_consolidated.so)",
-        "SONIC_NL_LIBRARY": "$(execpath @libnl3//:libnl_3_shared)",
-        "SONIC_GENL_LIBRARY": "$(execpath @libnl3//:libnl_genl_3_shared)",
-        "SONIC_ROUTE_LIBRARY": "$(execpath @libnl3//:libnl_route_3_shared)",
-        "SOURCE_DATE_EPOCH": "1598266417",
-    },
-    features = ["-sanitize_pwd"],
-    set_file_prefix_map = True,
-    out_bin_dir = "bin",
-    out_binaries = ["wpa_supplicant", "wpa_cli", "wpa_passphrase"],
-    out_data_files = [
-        "systemd/wpa_supplicant.service",
-        "systemd/wpa_supplicant@.service",
-        "systemd/wpa_supplicant-nl80211@.service",
-        "systemd/wpa_supplicant-wired@.service",
-        "dbus/fi.w1.wpa_supplicant1.service",
-    ],
-    deps = [
-        "@sonic_swss_common//:libswsscommon_shared",
-        "@sonic_fips//openssl:build",
-        "@libnl3//:libnl_3",
-        "@libnl3//:libnl_genl_3",
-        "@libnl3//:libnl_route_3",
-        ":libnl_3_shared_cc",
-        ":libnl_genl_3_shared_cc",
-        ":libnl_route_3_shared_cc",
-        "@wpa_deps//libdbus-1-dev:libdbus-1",
-        "@wpa_deps//libncurses-dev:libncurses",
-        "@wpa_deps//libpcsclite-dev:libpcsclite",
-        "@wpa_deps//libreadline-dev:libreadline",
-    ],
-    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+    srcs = [":wpa_supplicant", ":wpa_cli", ":wpa_passphrase"],
 )
 
-[filegroup(name = binary, srcs = [":build"], output_group = binary) for binary in ["wpa_supplicant", "wpa_cli", "wpa_passphrase"]]
+# New owner output paths ensure CodeQL observes real compile actions even
+# after source dependencies and the regular programs have been prepared.
+wpa_binaries(prefix = "codeql_")
+filegroup(
+    name = "codeql_build",
+    srcs = [":codeql_" + name for name in ["wpa_supplicant", "wpa_cli", "wpa_passphrase"]],
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+)
 
 # Runtime payload mappings follow debian/wpasupplicant.{install,links,docs,
 # examples,manpages} and the existing dh_install override. SONiC's merged-/usr
@@ -94,9 +53,18 @@ genrule(
           "; ".join(["\"$$tool\" \"$$root/$(location wpa_supplicant/doc/docbook/" + name.rsplit(".", 1)[0] + ".sgml)\"" for name in _MANUALS]),
 )
 
+
 _UNITS = ["wpa_supplicant.service", "wpa_supplicant@.service", "wpa_supplicant-nl80211@.service", "wpa_supplicant-wired@.service", "fi.w1.wpa_supplicant1.service"]
-[filegroup(name = "raw_" + name, srcs = [":build"], output_group = name) for name in _UNITS]
-[keep_debug_info(name = name, src = ":raw_" + name) for name in _UNITS]
+
+[
+    expand_template(
+        name = name,
+        template = "wpa_supplicant/" + ("dbus/" if name.startswith("fi.") else "systemd/") + (name.replace("@.service", ".service.arg.in") if "@" in name else name + ".in"),
+        out = "generated/" + name,
+        substitutions = {"@BINDIR@": "/sbin"},
+    )
+    for name in _UNITS
+]
 
 _DATA = {
     "usr/sbin/wpa_action": ("debian/ifupdown/wpa_action", "0755"),
@@ -174,9 +142,6 @@ runtime_packages(
     apt_packages = {"@wpa_runtime//" + package + ":data": "@wpa_runtime//" + package + ":control" for package in ["libdbus-1-3", "libpcsclite1", "libreadline8t64", "libtinfo6"]},
 )
 
-filegroup(name = "raw_build_tree", srcs = [":build"], output_group = "gen_dir")
-keep_debug_info(name = "package_build_tree", src = ":raw_build_tree")
-
 flatten(
     name = "test_runtime",
     testonly = True,
@@ -191,39 +156,37 @@ _OWNER_TARS = [
     "@libnl3//:libnl-genl-3-runtime_files",
     "@libnl3//:libnl-route-3-runtime_files",
 ]
+# Inspect the same configured binaries that the runtime TAR packages.
+[
+    keep_debug_info(
+        name = "packaged_" + name,
+        src = ":" + name,
+        testonly = True,
+        visibility = ["//visibility:private"],
+    )
+    for name in ["wpa_supplicant", "wpa_cli", "wpa_passphrase"]
+]
 _PACKAGE_INPUTS = [
-    ":wpasupplicant_pkg", ":wpasupplicant_pkg.debug_symbols", ":sources",
-    ":package_build_tree", ":test_runtime",
+    ":wpasupplicant_pkg", ":wpasupplicant_pkg.debug_symbols", "debian/control",
+    ":test_runtime",
     "@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py",
-] + [":manuals/" + name for name in _MANUALS] + _OWNER_TARS
+] + [":" + name for name in _UNITS] + [":packaged_" + name for name in ["wpa_supplicant", "wpa_cli", "wpa_passphrase"]] + [":manuals/" + name for name in _MANUALS] + _OWNER_TARS
 py_test(
     name = "package_test",
     srcs = ["tools/bazel/package_test.py"],
     main = "tools/bazel/package_test.py",
     args = ["$(location " + label + ")" for label in _PACKAGE_INPUTS],
-    data = _PACKAGE_INPUTS,
+    data = _PACKAGE_INPUTS + [":source_files"],
     deps = ["@sonic_fips//openssl:package_test_utils"],
     timeout = "long",
-    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux", "@sonic_build_infra//platforms:trixie"],
 )
 
 # These self-contained programs are the maintained upstream run-tests suite
 # plus base64 and RC4 vectors. HTTPS/X.509 tools have compile-only coverage.
 _UPSTREAM_PROGRAMS = ["test-aes", "test-base64", "test-list", "test-md4", "test-milenage", "test-rc4", "test-rsa-sig-ver", "test-sha1", "test-sha256", "test-x509v3", "test-https", "test-https_server"]
-make(
-    name = "upstream_tests_build",
-    testonly = True,
-    lib_source = ":sources",
-    args = ["-C root", "-f tools/bazel/Makefile", "-j2"],
-    targets = ["upstream-tests", "install-upstream-tests"],
-    env = {"SOURCE_DATE_EPOCH": "1598266417"},
-    features = ["-sanitize_pwd"],
-    set_file_prefix_map = True,
-    out_bin_dir = "bin",
-    out_binaries = _UPSTREAM_PROGRAMS,
-    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
-)
-[filegroup(name = name, testonly = True, srcs = [":upstream_tests_build"], output_group = name) for name in _UPSTREAM_PROGRAMS]
+[alias(name = name, actual = "//tests:" + name, testonly = True) for name in _UPSTREAM_PROGRAMS]
+filegroup(name = "upstream_tests_build", testonly = True, srcs = [":" + name for name in _UPSTREAM_PROGRAMS])
 py_test(
     name = "upstream_test",
     srcs = ["tools/bazel/upstream_test.py"],
@@ -231,26 +194,5 @@ py_test(
     args = ["$(location :" + name + ")" for name in _UPSTREAM_PROGRAMS[:9]],
     data = [":" + name for name in _UPSTREAM_PROGRAMS],
     timeout = "long",
-    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
-)
-
-py_test(
-    name = "build_flags_test",
-    srcs = ["tools/bazel/build_flags_test.py"],
-    args = ["$(location @sonic_build_infra//tools/build_tools:make)", "$(location src/build.rules)"],
-    data = ["@sonic_build_infra//tools/build_tools:make", "src/build.rules"],
-    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
-)
-
-py_test(
-    name = "make_flags_test",
-    srcs = ["tools/bazel/make_flags_test.py"],
-    args = [
-        "$(rootpath tools/bazel/make_with_flags.sh)",
-        "$(rootpath tools/bazel/Makefile)",
-    ],
-    data = ["tools/bazel/make_with_flags.sh", "tools/bazel/Makefile"],
-    # Native Trixie CI supplies GCC14 and Make for the actual exec-limit test.
-    tags = ["local"],
-    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux", "@sonic_build_infra//platforms:trixie"],
 )

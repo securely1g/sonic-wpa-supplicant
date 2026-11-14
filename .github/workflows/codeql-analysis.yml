@@ -1,6 +1,4 @@
-# For more infomation, please visit: https://github.com/github/codeql-action
-
-name: "CodeQL"
+name: CodeQL
 
 on:
   push:
@@ -11,103 +9,33 @@ on:
     branches:
       - 'master'
       - '202[0-9][0-9][0-9]'
-      - 'codex/bazel-amd64'
   workflow_dispatch:
 
 jobs:
   analyze:
-    name: Analyze
+    name: Analyze Python
     runs-on: ubuntu-22.04
     permissions:
       actions: read
       contents: read
       security-events: write
-
-    strategy:
-      fail-fast: false
-      matrix:
-        # The legacy C++ job below generates Common DEBs. This source-TAR
-        # feature uses the separate traced Bazel C++ job below; other branches
-        # keep their existing languages.
-        language: ${{ fromJSON(((github.head_ref || github.ref_name) == 'codex/bazel-amd64' || (github.head_ref || github.ref_name) == 'codex/compiler-response-files') && '["python"]' || '["cpp","python"]') }}
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-    # Initializes the CodeQL tools for scanning.
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
-      with:
-        config-file: ./.github/codeql/codeql-config.yml
-        languages: ${{ matrix.language }}
-
-    - if: matrix.language == 'cpp'
-      name: prepare
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libxml-simple-perl \
-            aspell \
-            aspell-en \
-            libhiredis-dev \
-            libnl-3-dev \
-            libnl-genl-3-dev \
-            libnl-route-3-dev \
-            libnl-nf-3-dev \
-            libyang-dev \
-            libzmq3-dev \
-            libzmq5 \
-            swig \
-            libpython3-dev \
-            libgtest-dev \
-            libgmock-dev \
-            libboost-dev \
-            libboost-serialization-dev \
-            dh-exec \
-            doxygen \
-            libdbus-1-dev \
-            cdbs \
-            bison \
-            flex \
-            graphviz \
-            autoconf-archive \
-            uuid-dev \
-            libjansson-dev \
-            python3 \
-            nlohmann-json3-dev \
-            cargo
-
-    - if: matrix.language == 'cpp'
-      name: build-swss-common
-      run: |
-        set -x
-        cd ..
-        git clone https://github.com/Azure/sonic-swss-common
-        pushd sonic-swss-common
-        ./autogen.sh
-        dpkg-buildpackage -rfakeroot -us -uc -b -Pnoyangmod,nopython2 -j$(nproc)
-        popd
-        dpkg-deb -x libswsscommon_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
-        dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
-        ls $(dirname $GITHUB_WORKSPACE)/usr/include
-
-    - if: matrix.language == 'cpp'
-      name: build
-      run: |
-        set -x
-        pushd wpa_supplicant
-        cp defconfig .config
-        make EXTRA_CFLAGS="-I$(dirname $GITHUB_WORKSPACE)/usr/include" LDFLAGS="-L$(dirname $GITHUB_WORKSPACE)/usr/lib/x86_64-linux-gnu"
-        popd
-
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
-      with:
-        category: "/language:${{matrix.language}}"
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          config-file: ./.github/codeql/codeql-config.yml
+          languages: python
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          category: /language:python
 
   bazel-cpp:
     name: Analyze native source (cpp, AMD64)
-    if: ${{ ((github.head_ref || github.ref_name) == 'codex/bazel-amd64' || (github.head_ref || github.ref_name) == 'codex/compiler-response-files') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     container: debian:trixie-20260918@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c
@@ -141,6 +69,12 @@ jobs:
         run: |
           test "$(uname -m)" = x86_64
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          downloader_config="$(mktemp "$RUNNER_TEMP/wpa-downloader.XXXXXX")"
+          curl --fail --location --retry 3 \
+            https://raw.githubusercontent.com/securely1g/sonic-bazel-registry/97cc502556b7ec3435d2d67b105315bcc18bb47e/ci/source_mirrors.cfg \
+            --output "$downloader_config"
+          printf '%s  %s\n' ddd6f40504a30e138a62be0d728e1a352391d0f781c927eaf4ea45c44d8a0720 "$downloader_config" | sha256sum --check --status
+          printf 'common --experimental_downloader_config="%s"\n' "$downloader_config" >> .bazelrc.user
           python3 - <<'PY'
           from pathlib import Path
           home = Path.home() / '.bazelrc'
@@ -158,7 +92,7 @@ jobs:
         run: |
           codeql_output_base="$(mktemp -d "$RUNNER_TEMP/wpa-codeql.XXXXXX")"
           printf "WPA_CODEQL_OUTPUT_BASE=%s\n" "$codeql_output_base" >> "$GITHUB_ENV"
-          tools/bazel/draft_bazel.sh --batch --output_base="$codeql_output_base" build //:build \
+          bazel --batch --output_base="$codeql_output_base" build //:build \
             --compilation_mode=dbg --jobs=2 --spawn_strategy=local --action_env=PATH=/usr/bin:/bin \
             --noremote_accept_cached --noremote_upload_local_results \
             --disk_cache= --remote_cache= --remote_executor=
@@ -172,11 +106,13 @@ jobs:
           build-mode: manual
           db-location: ${{ runner.temp }}/wpa-codeql-db
           tools: https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.gz
-      - name: Compile WPA's identical private source target under tracing
+      - name: Compile WPA programs and SONiC driver under tracing
         run: |
-          # This owner action has never run in this output base. Keep only the
-          # prepared local tool actions cached; external cache reads stay off.
-          tools/bazel/draft_bazel.sh --batch --output_base="$WPA_CODEQL_OUTPUT_BASE" build //:codeql_build \
+          # These native owner compile actions have never run in this output base.
+          # The three programs and SONiC driver library use the same sources
+          # and settings as production. Prepared dependencies remain cached;
+          # external cache reads stay off.
+          bazel --batch --output_base="$WPA_CODEQL_OUTPUT_BASE" build //:codeql_build \
             --compilation_mode=dbg --jobs=2 --spawn_strategy=local --action_env=PATH=/usr/bin:/bin \
             --noremote_accept_cached --noremote_upload_local_results \
             --disk_cache= --remote_cache= --remote_executor=

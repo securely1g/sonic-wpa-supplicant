@@ -25,7 +25,7 @@ def canonical(path):
     return "usr/" + path if path.startswith(("sbin/", "lib/")) else path
 
 
-def inventory(source, built):
+def inventory(source, generated):
     """Read the existing Debian payload declarations; reject unknown syntax."""
     result = {}
     for line in (source / "debian/wpasupplicant.install").read_text().splitlines():
@@ -34,11 +34,11 @@ def inventory(source, built):
             continue
         assert len(fields) == 2, fields
         if fields[0].startswith("wpa_supplicant/systemd/"):
-            matches = list((built / "systemd").glob("*.service"))
+            matches = [path for name, path in generated.items() if name.startswith("wpa_supplicant") and name.endswith(".service")]
         elif fields[0].startswith("wpa_supplicant/dbus/fi."):
-            matches = list((built / "dbus").glob("*.service"))
+            matches = [path for name, path in generated.items() if name.startswith("fi.") and name.endswith(".service")]
         elif fields[0] in {"wpa_supplicant/" + Path(name).name for name in BINARIES}:
-            matches = [built / "bin" / Path(fields[0]).name]
+            matches = [generated[Path(fields[0]).name]]
         else:
             matches = list(source.glob(fields[0]))
         assert matches and all(path.is_file() for path in matches), fields
@@ -73,10 +73,12 @@ def inventory(source, built):
 
 
 def main():
-    runtime, debug, source, built, dependencies, filter_file, *inputs = map(Path, sys.argv[1:])
-    manuals, owner_tars = inputs[:5], inputs[5:]
+    runtime, debug, control, dependencies, filter_file, *inputs = map(Path, sys.argv[1:])
+    source = control.parent.parent
+    generated = {path.name: path for path in inputs[:8]}
+    manuals, owner_tars = inputs[8:13], inputs[13:]
     assert len(manuals) == 5 and owner_tars
-    expected, expected_links = inventory(source, built)
+    expected, expected_links = inventory(source, generated)
     for manual in manuals:
         destination = "usr/share/man/man" + manual.name[-1] + "/" + manual.name
         assert destination in expected and manual.is_file(), manual
@@ -129,7 +131,7 @@ def main():
             program = subprocess.check_output(["readelf", "-lW", binary], text=True)
             assert "BIND_NOW" in dynamic and "GNU_RELRO" in program, name
             assert re.search(r"GNU_STACK\s+.*\sRW\s", program), name
-            check_symbols(binary, symbols, work)
+            check_symbols(binary, symbols, work, prefix_mapped=True)
             check_gdb(binary, symbols, "main", {"wpa_supplicant": "main.c", "wpa_cli": "wpa_cli.c", "wpa_passphrase": "wpa_passphrase.c"}[binary.name])
         check_gdb(root / "usr/sbin/wpa_supplicant", symbols, "sonic_db_set", "sonic_operators.cpp")
         debug_files = [m for m in debug_entries.values() if m.isfile()]

@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUTS = {"//:wpasupplicant_pkg": "wpasupplicant.tar",
            "//:wpasupplicant_pkg.debug_symbols": "wpasupplicant.debug.tar.gz",
            "//:runtime_packages.json": "runtime_packages.json"}
-TESTS = ["//:package_test", "//:upstream_test", "//:build_flags_test", "//:make_flags_test"]
+TESTS = ["//:package_test", "//:upstream_test"]
 
 
 def require(value, message):
@@ -88,7 +88,7 @@ def main():
     output = args.output.resolve()
     private = output / "private"
     private.mkdir(parents=True, exist_ok=True)
-    prefix = [str(ROOT / "tools/bazel/draft_bazel.sh")]
+    prefix = ["bazel"]
     if args.output_user_root:
         prefix += ["--output_user_root=" + str(args.output_user_root.resolve())]
     flags = ["--jobs=2", "--local_test_jobs=1"]
@@ -108,11 +108,11 @@ def main():
 
     def resolved_inputs():
         graph = bazel("mod", "graph")
-        require("sonic-build-infra@0.0.26-51c838da6ff57295fde6e0bc3807841cb31a8568" in graph,
+        require("sonic-build-infra@0.0.34-a4723268cd72a573ed316ab75347e698cc3f86ab" in graph,
                 "Selected shared tooling version differs from the reviewed source")
         infra = bazel("mod", "show_repo", "@sonic_build_infra")
-        require("http_archive(" in infra and "51c838da6ff57295fde6e0bc3807841cb31a8568" in infra
-                and "sha256-nYuM1ahKhqAJUXseWPs2LRNi9qKEAyAGLYVw7GbX750=" in infra,
+        require("http_archive(" in infra and "a4723268cd72a573ed316ab75347e698cc3f86ab" in infra
+                and "sha256-/jYt+Q3QG7UIx1FdyA1VgHZsaYtYD09X7B+KPqrh98M=" in infra,
                 "Actual tooling source is not the reviewed immutable archive; local overrides are not acceptance")
         libnl = bazel("mod", "show_repo", "@libnl3")
         require("libnl3@3.7.0.sonic.7" in graph and "http_archive(" in libnl
@@ -120,12 +120,19 @@ def main():
                 and "0002-match-shared-output-sonames.patch" in libnl,
                 "Actual libnl repository lacks the reviewed owner interface")
         common = bazel("mod", "show_repo", "@sonic_swss_common")
-        require("sonic-swss-common@0.0.8-43598143ef4a46431eae0859915cd7d951dad1ed" in graph
-                and "http_archive(" in common and "43598143ef4a46431eae0859915cd7d951dad1ed" in common
-                and "sha256-a6PXXUxzW+0tTMaaOwypdZC/T6vvj7b1SiiEwLfhhpE=" in common,
+        require("sonic-swss-common@0.0.9-334389eae54afd1f4f5ee69f89c3a7ad2062ee61" in graph
+                and "http_archive(" in common and "334389eae54afd1f4f5ee69f89c3a7ad2062ee61" in common
+                and "sha256-MX76U2Z8y01QmyNoO2ZVqIXvpWySdJuyovJ/unKqzuc=" in common,
                 "Common differs from the registered owner source")
+        fips = bazel("mod", "show_repo", "@sonic_fips")
+        require("sonic-fips@0.0.6-18a778db501d455f8a1b6d1e3ef8e17121661177" in graph
+                and "http_archive(" in fips and "18a778db501d455f8a1b6d1e3ef8e17121661177" in fips
+                and "sha256-vzJY61s9LR7vXQTgw+wtr4G5uiFmJWglig8h8PiNKRs=" in fips,
+                "OpenSSL differs from the registered owner source")
+        (output / "fips-repository.txt").write_text(fips)
         (output / "common-repository.txt").write_text(common)
-        record = {"common_repository_sha256": hashlib.sha256(common.encode()).hexdigest(),
+        record = {"fips_repository_sha256": hashlib.sha256(fips.encode()).hexdigest(),
+                  "common_repository_sha256": hashlib.sha256(common.encode()).hexdigest(),
                   "module_graph_sha256": hashlib.sha256(graph.encode()).hexdigest(),
                   "infra_repository_sha256": hashlib.sha256(infra.encode()).hexdigest(),
                   "libnl_repository_sha256": hashlib.sha256(libnl.encode()).hexdigest()}
@@ -136,10 +143,19 @@ def main():
 
     def paths():
         result = {}
+        # Bind output lookup to the accepted invocation. Bazel info does not
+        # reliably resolve apparent platform repository names under Bzlmod.
+        execution_roots = set()
+        for line in (private / "build-events.jsonl").read_text().splitlines():
+            event = json.loads(line)
+            if "workspaceInfo" in event:
+                execution_roots.add(Path(event["workspaceInfo"]["localExecRoot"]))
+        require(len(execution_roots) == 1, "Expected one accepted execution root")
+        execution_root = execution_roots.pop()
         for label, name in OUTPUTS.items():
             files = bazel("cquery", "--output=files", "config(" + label + ", target)").splitlines()
             require(len(files) == 1, "Expected one public output: " + label)
-            result[name] = ROOT / files[0]
+            result[name] = execution_root / files[0]
             require(result[name].is_file(), "Missing public output: " + name)
         return result
 
@@ -179,6 +195,32 @@ def main():
             command = " ".join(action.get("arguments", []))
             require(not re.search(r"dpkg-buildpackage|dpkg-deb\s+(?:--build|-b)(?:\s|$)|pkg_deb|p4rt_(?:dbg_)?deb", command),
                     "DEB-producing command in configured graph")
+        targets_by_id = {item["id"]: item["label"] for item in graph["targets"]}
+        compiled = {}
+        for action in graph["actions"]:
+            label = targets_by_id[action["targetId"]]
+            if not label.startswith(("//:", "//tests:")):
+                continue
+            require(action["mnemonic"] != "ForeignCc", "WPA compilation must use native actions: " + label)
+            if action["mnemonic"] == "CppCompile":
+                arguments = action.get("arguments", [])
+                require("-c" in arguments, "Missing native source compile input: " + label)
+                compiled.setdefault(label, set()).add(arguments[arguments.index("-c") + 1])
+        expected = {"wpa_supplicant": 226, "sonic_operators": 1, "wpa_cli": 8, "wpa_passphrase": 11}
+        for prefix in (["", "codeql_"] if args.codeql else [""]):
+            for name, count in expected.items():
+                label = "//:" + ("" if name == "sonic_operators" else "bin/") + prefix + name
+                require(len(compiled.get(label, set())) == count, "Native source coverage differs: " + label)
+        test_counts = {"utils": 14, "crypto": 45, "tls": 17}
+        test_counts.update({name: 1 for name in [
+            "test-aes", "test-base64", "test-list", "test-md4", "test-milenage", "test-rc4",
+            "test-rsa-sig-ver", "test-sha1", "test-sha256", "test-x509v3", "test-https", "test-https_server",
+        ]})
+        for name, count in test_counts.items():
+            require(len(compiled.get("//tests:" + name, set())) == count,
+                    "Upstream native source coverage differs: " + name)
+        (output / "native-sources.json").write_text(json.dumps(
+            {label: sorted(sources) for label, sources in sorted(compiled.items())}, indent=2) + "\n")
         record = {"status": "passed", "architecture": "amd64", "actions": len(graph["actions"]),
                   "outputs": len(outputs), "deb_outputs": 0, "targets": targets}
         (output / "action-audit.json").write_text(json.dumps(record, indent=2) + "\n")
@@ -219,7 +261,7 @@ def main():
         record = {"status": "passed", "seconds": {"noop": noop, "changed": changed_time, "restored": restored_time},
                   "original": original, "changed": changed, "restored": snapshot(files),
                   "changed_installed_program": "usr/bin/wpa_passphrase",
-                  "scope": "Same retained output base; Make recompiles its foreign action. No remote-cache-hit claim."}
+                  "scope": "Same retained output base; native source compile/link/package actions. No remote-cache-hit claim."}
         (output / "incremental.json").write_text(json.dumps(record, indent=2) + "\n")
     else:
         require(json.loads((output / "build.json").read_text())["status"] == "passed", "Accepted build required")
@@ -239,8 +281,8 @@ def main():
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         record = {**identity, "architecture": "amd64", "artifacts": snapshot(files),
                   "resolved_inputs": json.loads((output / "resolved-inputs.json").read_text()),
-                  "registry_revision": "b5a92b67de1fa3b2ad6001f9f66e8308fb868a7a",
-                  "infra_source": "51c838da6ff57295fde6e0bc3807841cb31a8568"}
+                  "registry": "https://raw.githubusercontent.com/securely1g/sonic-bazel-registry/main",
+                  "infra_source": "a4723268cd72a573ed316ab75347e698cc3f86ab"}
         (output / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
 
 
