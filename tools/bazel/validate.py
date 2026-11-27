@@ -108,11 +108,11 @@ def main():
 
     def resolved_inputs():
         graph = bazel("mod", "graph")
-        require("sonic-build-infra@0.0.34-a4723268cd72a573ed316ab75347e698cc3f86ab" in graph,
+        require("sonic-build-infra@0.0.45-77ef625a4ddafc8cdc15f3cc6aee31eabac8a5de" in graph,
                 "Selected shared tooling version differs from the reviewed source")
         infra = bazel("mod", "show_repo", "@sonic_build_infra")
-        require("http_archive(" in infra and "a4723268cd72a573ed316ab75347e698cc3f86ab" in infra
-                and "sha256-/jYt+Q3QG7UIx1FdyA1VgHZsaYtYD09X7B+KPqrh98M=" in infra,
+        require("http_archive(" in infra and "77ef625a4ddafc8cdc15f3cc6aee31eabac8a5de" in infra
+                and "sha256-D+wwlV4qphdP9c8K2ynlEB7CxzG5+3an1f4SKFPaHvc=" in infra,
                 "Actual tooling source is not the reviewed immutable archive; local overrides are not acceptance")
         libnl = bazel("mod", "show_repo", "@libnl3")
         require("libnl3@3.7.0.sonic.7" in graph and "http_archive(" in libnl
@@ -125,9 +125,9 @@ def main():
                 and "sha256-MX76U2Z8y01QmyNoO2ZVqIXvpWySdJuyovJ/unKqzuc=" in common,
                 "Common differs from the registered owner source")
         fips = bazel("mod", "show_repo", "@sonic_fips")
-        require("sonic-fips@0.0.6-18a778db501d455f8a1b6d1e3ef8e17121661177" in graph
-                and "http_archive(" in fips and "18a778db501d455f8a1b6d1e3ef8e17121661177" in fips
-                and "sha256-vzJY61s9LR7vXQTgw+wtr4G5uiFmJWglig8h8PiNKRs=" in fips,
+        require("sonic-fips@1.11.0-2ed0920f2fea7940f4b2b7f5c37e51e225eb1ea6" in graph
+                and "http_archive(" in fips and "2ed0920f2fea7940f4b2b7f5c37e51e225eb1ea6" in fips
+                and "sha256-smFV+qIaawuRoUGTeZRdZCXpQN9jezYB4EvyBwffEWE=" in fips,
                 "OpenSSL differs from the registered owner source")
         (output / "fips-repository.txt").write_text(fips)
         (output / "common-repository.txt").write_text(common)
@@ -282,7 +282,7 @@ def main():
         record = {**identity, "architecture": "amd64", "artifacts": snapshot(files),
                   "resolved_inputs": json.loads((output / "resolved-inputs.json").read_text()),
                   "registry": "https://raw.githubusercontent.com/securely1g/sonic-bazel-registry/main",
-                  "infra_source": "a4723268cd72a573ed316ab75347e698cc3f86ab"}
+                  "infra_source": "77ef625a4ddafc8cdc15f3cc6aee31eabac8a5de"}
         (output / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
 
 
